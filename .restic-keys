@@ -1,0 +1,4 @@
+export RESTIC_PASSWORD=Test2323
+
+#option to hide pass
+#export MYSQL_PWD=$(cat /root/mysql_password)
