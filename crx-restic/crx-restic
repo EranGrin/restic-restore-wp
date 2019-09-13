@@ -1,0 +1,442 @@
+#!/bin/bash
+#
+# Generic Shell Script Skeleton.
+# Copyright (c) {{ YEAR }} - {{ AUTHOR }} <{{ AUTHOR_EMAIL }}>
+#
+# Built with shell-script-skeleton v0.0.3 <http://github.com/z017/shell-script-skeleton>
+
+#######################################
+# CONSTANTS & VARIABLES
+#######################################
+readonly PROJECT_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+
+#######################################
+# FUNCTIONS
+#######################################
+
+# Print out messages to STDERR.
+function ech() { echo -e "$@" >&2; }
+
+# Print out error messages to STDERR.
+function err() { echo -e "\033[0;31mERROR: $@\033[0m" >&2;  }
+
+# Shows an error if required tools are not installed.
+function required {
+  local e=0
+  for tool in "$@"; do
+    type $tool >/dev/null 2>&1 || {
+      e=1 && err "$tool is required for running this script. Please install $tool and try again."
+    }
+  done
+  [[ $e < 1 ]] || exit 2
+}
+
+# Parse template file variables in the format "{{ VAR }}" with the "VAR" value.
+# parse_template <input file template> <output file> <string of variables>
+function parse_template {
+  local e=0
+  [[ ! -f "$1" ]] && err "$1 is not a valid file." && e=1
+  [[ $2 != ${2%/*} ]] && mkdir -p ${2%/*}
+  [[ -z $3 ]] && err "$3, must be an string of variables to replace" && e=1
+  if [[ $e > 0 ]]; then
+    ech "Usage: parse_template <input file template> <output file> <string of variables>"
+    exit 2
+  fi
+  local args
+  for v in $3; do
+    args="${args}s~{{ $v }}~${!v}~g;"
+  done
+  sed "$args" < $1 > $2
+}
+
+# Parse all template files ".tpl" in the input_dir and saved them to output_dir
+# parse_templates <input_dir> <output_dir> <string of variables>
+function parse_templates {
+  local e=0
+  [[ ! -d $1 ]] && err "$1 is not a valid directory." && e=1
+  [[ -z $3 ]] && err "$3, must be an string of variables to replace" && e=1
+  if [[ $e > 0 ]]; then
+    echo "Usage: parse_templates <input_dir> <output_dir> <string of variables>"
+    exit 2
+  fi
+  # parse each file
+  for file in "$1"/*.tpl*; do
+    local filename=${file##*/}
+    local outfile=${filename%.tpl*}${filename##*.tpl}
+    parse_template $file $2/$outfile "$3"
+  done
+}
+
+
+#######################################
+# SCRIPT CONSTANTS & VARIABLES
+#######################################
+
+# Script version
+readonly VERSION=0.0.1
+
+# List of required tools, example: REQUIRED_TOOLS=(git ssh)
+readonly REQUIRED_TOOLS=()
+
+# Long Options. To expect an argument for an option, just place a : (colon)
+# after the proper option flag.
+readonly LONG_OPTS=(help version cron server: exclude: group-by: dry-run)
+
+# Short Options. To expect an argument for an option, just place a : (colon)
+# after the proper option flag.
+readonly SHORT_OPTS=hvcs:e:g:d
+
+# Script name
+readonly SCRIPT_NAME=${0##*/}
+
+# restic command
+readonly RESTIC="nice restic"
+
+# Bucket prefix
+readonly BUCKET_PREFIX="crx-server"
+
+# crx-restic config dir
+declare BACKUP_RESTORE_CONFIG_DIR=~/.crx-restic
+
+# Server name (used by restic backup --hostname)
+# if not specified it's implicitly determined through bucket name
+declare SERVER=""
+
+# AWS URL
+declare AWS_URL="s3:s3.amazonaws.com"
+
+# AWS credentials
+declare AWS_ACCESS_KEY_ID=""
+declare AWS_SECRET_ACCESS_KEY=""
+
+# Restic password
+declare RESTIC_PASSWORD=""
+
+# Upload limit in KiB/s
+declare UP_LIMIT=8000
+
+# exclude file
+declare EXCLUDE=""
+
+# default policy
+declare DEFAULT_POLICY="--keep-daily 7 --keep-weekly 5 --keep-monthly 12 --keep-yearly 75"
+
+declare DRY_RUN
+
+declare GROUP_BY=""
+
+#######################################
+# setup
+#######################################
+function setup() {
+  if [[ ! -z $SERVER ]]; then
+    BACKUP_RESTORE_BUCKET="$BUCKET_PREFIX"."$SERVER"
+  fi
+  if [[ -z "$BACKUP_RESTORE_BUCKET" ]] ; then echo "Environment variable BACKUP_RESTORE_BUCKET not set"; exit 1; fi
+  if [[ ! -d "$BACKUP_RESTORE_CONFIG_DIR" ]]; then echo "Config dir $BACKUP_RESTORE_CONFIG_DIR does not exist"; exit 1; fi
+
+  # get AWS credentials
+  while read -r line || [[ -n "$line" ]]; do
+    IFS=':' read -r -a line_array <<< "$line"
+    key=${line_array[0]}
+    value=${line_array[1]}
+    if [[ "$key" == "AWS_ACCESS_KEY_ID" ]]; then
+      AWS_ACCESS_KEY_ID=$value
+    fi
+
+    if [[ "$key" == "AWS_SECRET_ACCESS_KEY" ]]; then
+      AWS_SECRET_ACCESS_KEY=$value
+    fi
+  done < ${BACKUP_RESTORE_CONFIG_DIR}/${BACKUP_RESTORE_BUCKET}/aws
+
+  # get restic password
+  while read -r line || [[ -n "$line" ]]; do
+    IFS=':' read -r -a line_array <<< "$line"
+    key=${line_array[0]}
+    value=${line_array[1]}
+    
+    if [[ "$key" == "password" ]]; then
+      RESTIC_PASSWORD=$value
+    fi
+  done < ${BACKUP_RESTORE_CONFIG_DIR}/${BACKUP_RESTORE_BUCKET}/restic
+
+  if [[ -z "$SERVER" ]]; then 
+    SERVER=${BACKUP_RESTORE_BUCKET#"$BUCKET_PREFIX."}
+  fi
+  
+  if [[ -z "$AWS_ACCESS_KEY_ID" ]]; then echo "No AWS_ACCESS_KEY_ID defined in $BACKUP_RESTORE_CONFIG_DIR/${BACKUP_RESTORE_BUCKET}/aws"; exit 1; fi
+  if [[ -z "$AWS_SECRET_ACCESS_KEY" ]]; then echo "No AWS_SECRET_ACCESS_KEY defined in $BACKUP_RESTORE_CONFIG_DIR/${BACKUP_RESTORE_BUCKET}/aws"; exit 1; fi
+  if [[ -z "$RESTIC_PASSWORD" ]]; then echo "No password found in $BACKUP_RESTORE_CONFIG_DIR/${BACKUP_RESTORE_BUCKET}/restic"; exit 1; fi
+  if [[ -z "$SERVER" ]]; then echo "Either no server name specified or it couldn't be determined through bucket name"; exit 1; fi
+
+  export AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
+  export AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
+  export RESTIC_REPOSITORY="$AWS_URL/$BACKUP_RESTORE_BUCKET/restic"
+  export RESTIC_PASSWORD="$RESTIC_PASSWORD"
+}
+
+#######################################
+# help command
+#######################################
+function help_command() {
+  cat <<END;
+
+USAGE:
+  $SCRIPT_NAME [options] <command>
+
+OPTIONS:
+  --help, -h                Alias help command
+  --bucket, -b              Bucket name
+  --server, -s              S3 Object name (should be equal FQDN of server)
+  --group-by, -g            string for grouping snapshots by host,paths,tags (default "host,paths")
+  --exclude, -e             path to exclude file
+  --dry-run, -d             dry run (only for forget_by_policy command)
+  --                        Denotes the end of the options.  Arguments after this
+                            will be handled as parameters even if they start with
+                            a '-'.
+
+COMMANDS:
+  help                      Display detailed help
+  init                      Initialize repository
+  check                     Check repository for errors
+  backup [tag] [target(s)]  Backup target
+  restore [id] [target]     Restore snapshot by id, default target is cwd            
+  forget [id]               Forget snapshot by id
+  forget_by_policy          Forget by default policy (--keep-daily 7 --keep-weekly 5 --keep-monthly 12 --keep-yearly 75)
+  server                    List servers
+  snapshots [vhost]         Show snapshots of server, optionally specify vhost
+  version                   Print version information. 
+END
+  exit 1
+}
+
+#######################################
+# version command
+#######################################
+function version_command() {
+  echo "$SCRIPT_NAME version $VERSION"
+}
+
+#######################################
+# default command
+#######################################
+function default_command() {
+  # set default command here
+  help_command
+}
+
+#######################################
+# server command
+#######################################
+function server_command() {
+  for output in $BACKUP_RESTORE_CONFIG_DIR/*
+  do
+      basename "$output"
+  done
+}
+
+#######################################
+# snapshots command
+#######################################
+function snapshots_command() {
+  if [[ -z $args ]]; then 
+    $RESTIC snapshots
+  else
+    args_array=( $args )
+    $RESTIC snapshots --tag ${args_array[0]}
+  fi
+}
+
+#######################################
+# unlock command
+#######################################
+function unlock_command() {
+  $RESTIC unlock
+}
+
+#######################################
+# restore command
+#######################################
+function restore_command() {
+  args_array=( $args )
+
+  case ${#args_array[@]} in
+  1)
+    $RESTIC restore ${args_array[0]} --target .
+    ;;
+  2)
+    $RESTIC restore ${args_array[0]} --target ${args_array[1]}
+    ;;
+  *) 
+    help_command; exit 1;
+  ;;
+  esac
+}
+
+#######################################
+# backup command
+#######################################
+function backup_command() {
+  args_array=( $args )
+
+  if [[ ${#args_array[@]} -lt 2 ]]; then 
+    echo "Not enough arguments \"$SCRIPT_NAME -s example.com backup tag target1 target2 ...\""
+    exit 1
+  fi 
+
+  if [[ -z "$EXCLUDE" ]]; then
+    $RESTIC -o s3.connections=1 --limit-upload $UP_LIMIT backup --hostname $SERVER --tag ${args_array[0]} "${args_array[@]:1}"
+  elif [[ ! -f "$EXCLUDE" ]]; then
+    echo "Exclude file $EXCLUDE does not exist"; exit 1;
+  else 
+    $RESTIC -o s3.connections=1 --limit-upload $UP_LIMIT backup  --exclude-file=$EXCLUDE --hostname $SERVER --tag ${args_array[0]} "${args_array[@]:1}"
+  fi
+
+}
+
+#######################################
+# check command
+#######################################
+function check_command() {
+  set e
+  d=$(date +%s)
+  $RESTIC check >"/tmp/restic-tmp-$d" 2>&1
+
+  # if locked longer than 12 hours unlock repo
+  locked=$(grep 'unable to create lock in backend' "/tmp/restic-tmp-$d")
+  if [[ ! -z "$locked" ]]; then
+    created=$(grep 'lock was created at' "/tmp/restic-tmp-$d")
+    brackets=$(grep -o '(.*)' <<< "$created")
+    hours=$(cut -d 'h' -f 1 <<< "$brackets")
+    hours=$(cut -d '(' -f 2 <<< "$hours")
+
+    if [[ $hours -gt 12 ]]; then
+      $RESTIC unlock
+      check_command
+    fi
+  fi
+  set -e
+}
+
+#######################################
+# forget command
+#######################################
+function forget_command() {
+  args_array=( $args )
+  $RESTIC -o s3.connections=1 forget --prune ${args_array[0]}
+}
+
+#######################################
+# keep command
+#######################################
+function forget_by_policy_command() {
+  args_array=( $args )
+
+  local dryRun=""
+
+  if [[ $DRY_RUN == true ]]; then
+    dryRun="--dry-run"
+  fi
+
+  if [[ -z "$GROUP_BY" ]]; then
+    $RESTIC -o s3.connections=1 forget $dryRun --prune $DEFAULT_POLICY
+  else 
+    $RESTIC -o s3.connections=1 forget $dryRun --prune --group-by $GROUP_BY $DEFAULT_POLICY
+  fi
+}
+
+#######################################
+# init command
+#######################################
+function init_command() {
+  $RESTIC init
+}
+
+#######################################
+#
+# MAIN
+#
+#######################################
+function main() {
+  # Required tools
+  required $REQUIRED_TOOLS
+
+  # Parse options
+  while [[ $# -ge $OPTIND ]] && eval opt=\${$OPTIND} || break
+        [[ $opt == -- ]] && shift && break
+        if [[ $opt == --?* ]]; then
+          opt=${opt#--}; shift
+
+          # Argument to option ?
+          OPTARG=;local has_arg=0
+          [[ $opt == *=* ]] && OPTARG=${opt#*=} && opt=${opt%=$OPTARG} && has_arg=1
+
+          # Check if known option and if it has an argument if it must:
+          local state=0
+          for option in "${LONG_OPTS[@]}"; do
+            [[ "$option" == "$opt" ]] && state=1 && break
+            [[ "${option%:}" == "$opt" ]] && state=2 && break
+          done
+          # Param not found
+          [[ $state = 0 ]] && OPTARG=$opt && opt='?'
+          # Param with no args, has args
+          [[ $state = 1 && $has_arg = 1 ]] && OPTARG=$opt && opt=::
+          # Param with args, has no args
+          if [[ $state = 2 && $has_arg = 0 ]]; then
+            [[ $# -ge $OPTIND ]] && eval OPTARG=\${$OPTIND} && shift || { OPTARG=$opt; opt=:; }
+          fi
+
+          # for the while
+          true
+        else
+          getopts ":$SHORT_OPTS" opt
+        fi
+  do
+    case "$opt" in
+      # List of options
+      h|help)       help_command ;;
+      s|server)     SERVER=$OPTARG ;;
+      e|exclude)    EXCLUDE=$OPTARG ;;
+      d|dry-run)    DRY_RUN=true ;;
+      g|group-by)   GROUP_BY=$OPTARG ;;
+      # Errors
+      ::)	err "Unexpected argument to option '$OPTARG'"; exit 2; ;;
+      :)	err "Missing argument to option '$OPTARG'"; exit 2; ;;
+      \?)	err "Unknown option '$OPTARG'"; exit 2; ;;
+      *)	err "Internal script error, unmatched option '$opt'"; exit 2; ;;
+    esac
+  done
+  readonly FORCE
+  shift $((OPTIND-1))
+
+
+  # No more arguments -> call default command
+  [[ -z "$1" ]] && default_command
+
+  # Set command and arguments
+  command="$1" && shift
+  args="$@"
+
+  # Execute the command
+  case "$command" in
+    help)     help_command ;;
+    version)  version_command ;;
+
+    check) setup; check_command ;;
+    backup) setup; backup_command ;;
+    forget) setup; forget_command ;;
+    forget_by_policy) setup; forget_by_policy_command ;;
+    init) setup; init_command ;;
+    restore) setup; restore_command ;;
+    unlock) setup; unlock_command ;;
+    server) server_command ;;
+    snapshots) setup; snapshots_command ;;
+
+    # Unknown command
+    *)  err "Unknown command '$command'"; exit 2; ;;
+  esac
+}
+#######################################
+# Run the script
+#######################################
+main "$@"

@@ -5,14 +5,17 @@ IFS=$'\n\t'
 
 #variables
 name=ikli
-path=/Applications/Mamp/htdocs/ikli
+base_path=
+src_path=/Applications/Mamp/htdocs/ikli
+current_path=$(pwd)
 database_user=dev
 database_pass=DEV2323
 dbserver=127.0.0.1
-current_path=$(pwd)
+
 
 # add a condition to check if repositoryis already initialize
-#based on this command restic -r /srv/restic-repo snapshots
+#based on this
+command restic -r /tmp/restic-repo snapshots
 # if error then create a new one or ask user
 
 #build a restic repo based on the website name
