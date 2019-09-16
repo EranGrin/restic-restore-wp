@@ -42,7 +42,11 @@ source .restic-keys
 #
 # restic -r $aws_repo --prune --keep-daily 7 --keep-weekly 4 --keep-monthly 12
 #
+
 # echo "\n`date` - Backup finished.\n"
 
 
-restic -r $aws_repo snapshots
+ restic -r $aws_repo snapshots --verbose
+
+# restic -r $aws_repo forget d1d3efd3
+# restic -r $aws_repo snapshots --json | jq '.' > test.json
