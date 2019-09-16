@@ -29,6 +29,7 @@ echo "\n`date` - Starting backup...\n"
 restic -r /tmp/${name}/restic-repo backup /Applications/Mamp/htdocs/ikli
 
 #maybe to add a script to add a scure pass to mylogin.cnf
+#https://dev.mysql.com/doc/refman/8.0/en/mysql-config-editor.html
 
 mysqldump --defaults-file=/${current_path}/.my.cnf --databases $name -u $database_user | restic -r /tmp/${name}/restic-repo backup --stdin --stdin-filename ${name}_db_dump.sql
 

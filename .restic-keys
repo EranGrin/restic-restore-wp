@@ -2,3 +2,6 @@ export RESTIC_PASSWORD=Test2323
 
 #option to hide pass
 #export MYSQL_PWD=$(cat /root/mysql_password)
+
+export AWS_ACCESS_KEY_ID=***REMOVED***
+export AWS_SECRET_ACCESS_KEY=***REMOVED***

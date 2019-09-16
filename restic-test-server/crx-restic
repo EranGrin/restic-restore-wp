@@ -93,10 +93,13 @@ readonly SCRIPT_NAME=${0##*/}
 readonly RESTIC="nice restic"
 
 # Bucket prefix
-readonly BUCKET_PREFIX="crx-server"
+readonly BUCKET_PREFIX="restic"
+#readonly BUCKET_PREFIX="crx-server"
+
 
 # crx-restic config dir
-declare BACKUP_RESTORE_CONFIG_DIR=~/.crx-restic
+declare BACKUP_RESTORE_CONFIG_DIR=~/Desktop/DEV/Back-rec-sys/restic-test-server
+#declare BACKUP_RESTORE_CONFIG_DIR=~/.crx-restic
 
 # Server name (used by restic backup --hostname)
 # if not specified it's implicitly determined through bucket name
@@ -120,6 +123,7 @@ declare EXCLUDE=""
 
 # default policy
 declare DEFAULT_POLICY="--keep-daily 7 --keep-weekly 5 --keep-monthly 12 --keep-yearly 75"
+### not sure if this does work as I could see allot
 
 declare DRY_RUN
 
@@ -130,11 +134,12 @@ declare GROUP_BY=""
 #######################################
 function setup() {
   if [[ ! -z $SERVER ]]; then
-    BACKUP_RESTORE_BUCKET="$BUCKET_PREFIX"."$SERVER"
+    BACKUP_RESTORE_BUCKET="restic-test-server"
   fi
-  if [[ -z "$BACKUP_RESTORE_BUCKET" ]] ; then echo "Environment variable BACKUP_RESTORE_BUCKET not set"; exit 1; fi
-  if [[ ! -d "$BACKUP_RESTORE_CONFIG_DIR" ]]; then echo "Config dir $BACKUP_RESTORE_CONFIG_DIR does not exist"; exit 1; fi
+  # if [[ -z "$BACKUP_RESTORE_BUCKET" ]] ; then echo "Environment variable BACKUP_RESTORE_BUCKET not set"; exit 1; fi
+  # if [[ ! -d "$BACKUP_RESTORE_CONFIG_DIR" ]]; then echo "Config dir $BACKUP_RESTORE_CONFIG_DIR does not exist"; exit 1; fi
 
+###################################################################
   # get AWS credentials
   while read -r line || [[ -n "$line" ]]; do
     IFS=':' read -r -a line_array <<< "$line"
@@ -147,33 +152,42 @@ function setup() {
     if [[ "$key" == "AWS_SECRET_ACCESS_KEY" ]]; then
       AWS_SECRET_ACCESS_KEY=$value
     fi
-  done < ${BACKUP_RESTORE_CONFIG_DIR}/${BACKUP_RESTORE_BUCKET}/aws
+  done < /Users/erangrinberg/Desktop/DEV/Back-rec-sys/restic-test-server/aws
+
+  #done < ${BACKUP_RESTORE_CONFIG_DIR}/${BACKUP_RESTORE_BUCKET}/aws
+
+
 
   # get restic password
   while read -r line || [[ -n "$line" ]]; do
     IFS=':' read -r -a line_array <<< "$line"
     key=${line_array[0]}
     value=${line_array[1]}
-    
+
     if [[ "$key" == "password" ]]; then
       RESTIC_PASSWORD=$value
     fi
-  done < ${BACKUP_RESTORE_CONFIG_DIR}/${BACKUP_RESTORE_BUCKET}/restic
+  done < /Users/erangrinberg/Desktop/DEV/Back-rec-sys/restic-test-server/restic
 
-  if [[ -z "$SERVER" ]]; then 
+  if [[ -z "$SERVER" ]]; then
     SERVER=${BACKUP_RESTORE_BUCKET#"$BUCKET_PREFIX."}
   fi
-  
-  if [[ -z "$AWS_ACCESS_KEY_ID" ]]; then echo "No AWS_ACCESS_KEY_ID defined in $BACKUP_RESTORE_CONFIG_DIR/${BACKUP_RESTORE_BUCKET}/aws"; exit 1; fi
-  if [[ -z "$AWS_SECRET_ACCESS_KEY" ]]; then echo "No AWS_SECRET_ACCESS_KEY defined in $BACKUP_RESTORE_CONFIG_DIR/${BACKUP_RESTORE_BUCKET}/aws"; exit 1; fi
-  if [[ -z "$RESTIC_PASSWORD" ]]; then echo "No password found in $BACKUP_RESTORE_CONFIG_DIR/${BACKUP_RESTORE_BUCKET}/restic"; exit 1; fi
-  if [[ -z "$SERVER" ]]; then echo "Either no server name specified or it couldn't be determined through bucket name"; exit 1; fi
+
+  # if [[ -z "$AWS_ACCESS_KEY_ID" ]]; then echo "No AWS_ACCESS_KEY_ID defined in $BACKUP_RESTORE_CONFIG_DIR/${BACKUP_RESTORE_BUCKET}/aws"; exit 1; fi
+  # if [[ -z "$AWS_SECRET_ACCESS_KEY" ]]; then echo "No AWS_SECRET_ACCESS_KEY defined in $BACKUP_RESTORE_CONFIG_DIR/${BACKUP_RESTORE_BUCKET}/aws"; exit 1; fi
+  # if [[ -z "$RESTIC_PASSWORD" ]]; then echo "No password found in $BACKUP_RESTORE_CONFIG_DIR/${BACKUP_RESTORE_BUCKET}/restic"; exit 1; fi
+  # if [[ -z "$SERVER" ]]; then echo "Either no server name specified or it couldn't be determined through bucket name"; exit 1; fi
 
   export AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID"
   export AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY"
-  export RESTIC_REPOSITORY="$AWS_URL/$BACKUP_RESTORE_BUCKET/restic"
+  export RESTIC_REPOSITORY="$AWS_URL/restic-test-server/"
   export RESTIC_PASSWORD="$RESTIC_PASSWORD"
 }
+
+# export RESTIC_REPOSITORY=s3:s3.amazonaws.com/YOUR-BUCKET-NAME
+# AWS_ACCESS_KEY_ID:***REMOVED***
+# AWS_SECRET_ACCESS_KEY:***REMOVED***
+# BUCKET_PREFIX="crx-server"
 
 #######################################
 # help command
@@ -200,12 +214,12 @@ COMMANDS:
   init                      Initialize repository
   check                     Check repository for errors
   backup [tag] [target(s)]  Backup target
-  restore [id] [target]     Restore snapshot by id, default target is cwd            
+  restore [id] [target]     Restore snapshot by id, default target is cwd
   forget [id]               Forget snapshot by id
   forget_by_policy          Forget by default policy (--keep-daily 7 --keep-weekly 5 --keep-monthly 12 --keep-yearly 75)
   server                    List servers
   snapshots [vhost]         Show snapshots of server, optionally specify vhost
-  version                   Print version information. 
+  version                   Print version information.
 END
   exit 1
 }
@@ -239,7 +253,7 @@ function server_command() {
 # snapshots command
 #######################################
 function snapshots_command() {
-  if [[ -z $args ]]; then 
+  if [[ -z $args ]]; then
     $RESTIC snapshots
   else
     args_array=( $args )
@@ -267,7 +281,7 @@ function restore_command() {
   2)
     $RESTIC restore ${args_array[0]} --target ${args_array[1]}
     ;;
-  *) 
+  *)
     help_command; exit 1;
   ;;
   esac
@@ -279,16 +293,16 @@ function restore_command() {
 function backup_command() {
   args_array=( $args )
 
-  if [[ ${#args_array[@]} -lt 2 ]]; then 
+  if [[ ${#args_array[@]} -lt 2 ]]; then
     echo "Not enough arguments \"$SCRIPT_NAME -s example.com backup tag target1 target2 ...\""
     exit 1
-  fi 
+  fi
 
   if [[ -z "$EXCLUDE" ]]; then
     $RESTIC -o s3.connections=1 --limit-upload $UP_LIMIT backup --hostname $SERVER --tag ${args_array[0]} "${args_array[@]:1}"
   elif [[ ! -f "$EXCLUDE" ]]; then
     echo "Exclude file $EXCLUDE does not exist"; exit 1;
-  else 
+  else
     $RESTIC -o s3.connections=1 --limit-upload $UP_LIMIT backup  --exclude-file=$EXCLUDE --hostname $SERVER --tag ${args_array[0]} "${args_array[@]:1}"
   fi
 
@@ -340,7 +354,7 @@ function forget_by_policy_command() {
 
   if [[ -z "$GROUP_BY" ]]; then
     $RESTIC -o s3.connections=1 forget $dryRun --prune $DEFAULT_POLICY
-  else 
+  else
     $RESTIC -o s3.connections=1 forget $dryRun --prune --group-by $GROUP_BY $DEFAULT_POLICY
   fi
 }
