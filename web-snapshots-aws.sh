@@ -46,7 +46,7 @@ source .restic-keys
 # echo "\n`date` - Backup finished.\n"
 
 
- restic -r $aws_repo snapshots --verbose --json | jq '.' > test.json
+ restic -r $aws_repo snapshots --group-by tags --json | jq '.' > test.json
 
 # restic -r $aws_repo forget d1d3efd3
 # restic -r $aws_repo snapshots --json | jq '.' > test.json
