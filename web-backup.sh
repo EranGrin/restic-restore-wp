@@ -15,7 +15,8 @@ dbserver=127.0.0.1
 
 # add a condition to check if repositoryis already initialize
 #based on this
-command restic -r /tmp/restic-repo snapshots
+# command restic -r /tmp/restic-repo snapshots
+# might be a good location on linux server /usr/local/bin/restic
 # if error then create a new one or ask user
 
 #build a restic repo based on the website name
@@ -35,8 +36,8 @@ mysqldump --defaults-file=/${current_path}/.my.cnf --databases $name -u $databas
 
 #mysqldump --defaults-file=/${current_path}/.my.cnf --databases ikli -u dev | restic -r /tmp/ikli/restic-repo backup --verbose --stdin --stdin-filename database_dump.sql
 
-echo "\n`date` - Running forget and prune...\n"
+# echo "\n`date` - Running forget and prune...\n"
 
-restic -r /tmp/${name}/restic-repo forget --prune --keep-daily 7 --keep-weekly 4 --keep-monthly 12
+# restic -r /tmp/${name}/restic-repo forget --prune --keep-daily 7 --keep-weekly 4 --keep-monthly 12
 
 echo "\n`date` - Backup finished.\n"

@@ -70,7 +70,8 @@ done < /Users/erangrinberg/Desktop/DEV/Back-rec-sys/restic-test-server/vhosts_wi
 
 
 # Forget by default policy
-sh ./crx-restic --group-by host,tags forget_by_policy
+sh ./crx-restic --group-by host,tags
+# forget_by_policy
 
 
 # Clean up
