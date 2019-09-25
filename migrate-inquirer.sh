@@ -44,6 +44,9 @@ absulote_path=$(cat snapshots.json | jq -j --arg p "$SITE_NAME" --arg t "$BACKUP
 
 dir="$(basename $absulote_path)" #extract the last dir from absulote path
 
+################################
+##### The actual restore #######
+##################################################################################################
 echo "Start restore - this might take a while"
 restic -r $aws_repo restore $BACKUP_ID --target $htdocs  --exclude='*.sql' --path "$absulote_path"
 
@@ -110,6 +113,11 @@ if [ "$selected_sql_credentials" == "New SQL credentials" ]; then
       	case $input in
       	    [yY][eE][sS]|[yY])
       			echo "Yes"
+
+            echo "\n`date` - Change sql credentials at wp-config.php \n"
+            wp --allow-root --path=$target_dir config set DB_USER "$new_sql_user" --raw
+            wp --allow-root --path=$target_dir config set DB_PASSWORD "$new_sql_pass" --raw
+
                   break
       			;;
       	    [nN][oO]|[nN])
@@ -120,11 +128,9 @@ if [ "$selected_sql_credentials" == "New SQL credentials" ]; then
       		;;
       	esac
     done
+
 fi
 
-echo "\n`date` - Change sql credentials at wp-config.php \n"
-wp --allow-root --path=$target_dir config set DB_USER "$new_sql_user" --raw
-wp --allow-root --path=$target_dir config set DB_PASSWORD "$new_sql_pass" --raw
 
 echo "\n`date` - Restore db \n"
 db_path=$(cat snapshots.json | jq -j --arg p "$SITE_NAME" --arg t "$BACKUP_TIME"  '.[] .snapshots[] | select(.tags[]== $p ) | select(.time == $t ) .paths[1]')
@@ -164,17 +170,24 @@ while true
 
 restic -r $aws_repo dump $BACKUP_ID $db_path | mysql -u $admin_sql_user --password=$admin_sql_pass #possibile to add the pass variable -P with capital -P
 
-
 ## extract the src-url from db
+## db name based on wp-config file
+db_name=$(wp --allow-root --path=$target_dir eval 'echo DB_NAME;')
+db_prefix=$(wp --allow-root --path=$target_dir db prefix)
+echo "db-name:$db_name"
+echo "db-name:$db_prefix"
 
+siteurl=$(mysql -u $admin_sql_user -p$admin_sql_pass $db_name -N -e"SELECT option_value  FROM ${db_prefix}options WHERE option_name = 'siteurl'")
+echo "url:$siteurl"
 ## ask for the URL_TARGET + URL_SRC
+URL_SRC=$siteurl
 
 echo "For the restore proccess of the DB, mysql will need to use admin user with global privileges"
 while true
     do
       echo "examples: http://website.com or http://localhost:8888/website"
 
-      read -r -p "What is the SOURCE URL, pls enter the url " URL_SRC
+      ## read -r -p "What is the SOURCE URL, pls enter the url " URL_SRC
       read -r -p "What is the TARGET URL, pls enter the url " URL_TARGET
 
         echo "\n"
@@ -197,7 +210,6 @@ while true
         ;;
       esac
   done
-
 
   wp --allow-root --path=$target_dir search-replace $URL_TARGET $URL_SRC
 
