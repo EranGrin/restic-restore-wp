@@ -2,12 +2,15 @@
 
 
 # This need to be changed to the relative AWS restic repo
-aws_repo=s3:https://s3.amazonaws.com/restic-test-server
+# aws_repo=s3:https://s3.amazonaws.com/restic-test-server
 
-htdocs=/Applications/mamp/htdocs #absulote path to htdocs on the target server
+# load env variables / credential need to be added to the file
 
+# aws_repo=s3:s3.amazonaws.com/***REMOVED***/restic
+aws_repo=s3:https://s3.amazonaws.com/***REMOVED***/restic
 
-#load env variables / credential need to be added to the file
+htdocs=/Applications/mamp/htdocs # absulote path to htdocs on the target server
+
 source .restic-keys
 
 # path for inquirer file
@@ -39,10 +42,62 @@ BACKUP_ID=$(cat snapshots.json | jq -j --arg p "$SITE_NAME" --arg t "$BACKUP_TIM
 
 echo "BackId: $BACKUP_ID"
 
-absulote_path=$(cat snapshots.json | jq -j --arg p "$SITE_NAME" --arg t "$BACKUP_TIME"  '.[] .snapshots[] | select(.tags[]== $p ) | select(.time == $t ) .paths[0]')
-# filter the absulote path based on the chosen arguments of SITE_NAME + BACKUP_TIME
+################################################################
+### Function for moving the absulote path to target path #######
+################################################################
+function move_path
+{
+
+  echo "\n`date` - Moveing wbesite directory to target-dir \n"
+  mv -v $src_dir/* $src_dir/.*  $target_dir
+
+  echo "\n`date` - Cleanup leftovers direcotries \n"
+  if [ -z "$base_dir" ]; then
+    ## this is a security if statment to check if the basedir var is empaty if it does
+    ## empty and script would not exit then all the htdocs will be deleted
+    echo "ERROR - could not find base-dir variable"
+    exit 1
+  else
+    rm -r $htdocs/$base_dir
+  fi
+
+}
+
+######################################################################
+###### extract path objects & assign to variables ####################
+######################################################################
+absulote_path=$(cat snapshots.json | jq -j --arg p "$SITE_NAME" --arg t "$BACKUP_TIME"  '.[] .snapshots[] | select(.tags[]== $p ) | select(.time == $t )
+.paths[] | select( test(".sql") | not )')
+# filter the absulote path based on the chosen arguments of SITE_NAME + BACKUP_TIME + regex no object with *sql
+echo "$absulote_path"
+
+relative_path=$(restic ls -r $aws_repo $BACKUP_ID  --path "$absulote_path" | sed -n 2p)
+#get the first dir from restic ls command - use to identify relative path
 
 dir="$(basename $absulote_path)" #extract the last dir from absulote path
+
+src_dir=$htdocs$absulote_path
+target_dir="$htdocs/$dir"
+
+echo "src-dir $src_dir"
+echo "target-dir $target_dir"
+
+
+base_dir=$(echo "$absulote_path" | awk -F "/" '{print $2}')
+
+##############################################################################
+###### check if target-dir alerady exists and if yes then remove it ##########
+##############################################################################
+
+echo "\n`date` - check if target-dir alerady exists and if yes then remove it\n"
+if [ -d "$target_dir" ]; then
+  echo "$target_dir"
+  echo "The target dir exists and therefore it will be removed"
+  rm -r $target_dir
+  mkdir -p $target_dir ### need to check this with absolute but for relative it might not be needed
+else
+  continue
+fi
 
 ################################
 ##### The actual restore #######
@@ -51,37 +106,23 @@ echo "Start restore - this might take a while"
 restic -r $aws_repo restore $BACKUP_ID --target $htdocs  --exclude='*.sql' --path "$absulote_path"
 
 
-###################################################
-### moving the absulote path to target path #######
-###################################################
-src_dir=$htdocs$absulote_path
-target_dir="$htdocs/$dir"
-
-echo "src-dir $src_dir"
-echo "target-dir $target_dir"
-
-echo "\n`date` - check if target-dir alerady exists and if yes then remove it\n"
-if [ -d "$target_dir" ]; then
-  rm -r $target_dir
-    echo "$target_dir"
-  mkdir -p $target_dir
+#############################################################
+###### check if the path is relative or absolute ############
+###### & based on path kind use move function or continue ###
+#############################################################
+echo "base_dir: $base_dir"
+echo "relative_path: $relative_path"
+if [[ $relative_path == "/$base_dir" ]]; then # test if path is relative or absolute
+  #use absolute path function
+  move_path
+  echo "found absolute path"
+  path_is="absolute"
 else
+  #use relative path function
   continue
-fi
+  echo "found relative path"
+  path_is="relative"
 
-echo "\n`date` - Moveing wbesite directory to target-dir \n"
-  mv -v $src_dir/* $src_dir/.*  $target_dir
-
-echo "\n`date` - Cleanup leftovers direcotries \n"
-  base_dir=$(echo "$absulote_path" | awk -F "/" '{print $2}')
-
-if [ -z "$base_dir" ]; then
-## this is a security if statment to check if the basedir var is empaty if it does
-## empty and script would not exit then all the htdocs will be deleted
-  echo "ERROR - could not find base-dir variable"
-    exit 1
-else
-  rm -r $htdocs/$base_dir
 fi
 
 
@@ -94,7 +135,7 @@ fi
 ## ask user if he want to assign new sql credentials to the website
 
 sql_credentials=( 'New SQL credentials' 'Orignin SQL credentials' )
-list_input "would you like to assign new SQL credentials or use the origin SQL credentials ?" sql_credentials selected_sql_credentials
+list_input "would you like to assign new SQL credentials to the website or use the origin SQL credentials ?" sql_credentials selected_sql_credentials
 
 if [ "$selected_sql_credentials" == "New SQL credentials" ]; then
   while true
@@ -104,7 +145,7 @@ if [ "$selected_sql_credentials" == "New SQL credentials" ]; then
           read -r -p "what is the sql pass, pls enter the password " new_sql_pass
 
           echo "\n"
-          echo "credentials"
+          echo "website user sql credentials"
           echo "new sql user $new_sql_user"
           echo "new sql pass $new_sql_pass"
 
@@ -133,11 +174,12 @@ fi
 
 
 echo "\n`date` - Restore db \n"
-db_path=$(cat snapshots.json | jq -j --arg p "$SITE_NAME" --arg t "$BACKUP_TIME"  '.[] .snapshots[] | select(.tags[]== $p ) | select(.time == $t ) .paths[1]')
-# filter the db sql file path based on the chosen arguments of SITE_NAME + BACKUP_TIME
+db_path=$(cat snapshots.json | jq -j --arg p "$SITE_NAME" --arg t "$BACKUP_TIME"  '.[] .snapshots[] | select(.tags[]== $p ) | select(.time == $t ) .paths[] | select( test(".sql") )')
+
+# filter the db sql file path based on the chosen arguments of SITE_NAME + BACKUP_TIME + regex object with *sql
 
 
-echo "For the restore proccess of the DB, mysql will need to use admin user Global privileges"
+echo "For the restore proccess of the DB, mysql will need to use admin user with global privileges"
 while true
     do
       read -r -p "pls enter sql admin user name " admin_sql_user
@@ -165,17 +207,46 @@ while true
       esac
   done
 
-  db_path="${db_path:1}" #remove first character from string
-  echo "Restore DB in new SQL server"
 
-restic -r $aws_repo dump $BACKUP_ID $db_path | mysql -u $admin_sql_user --password=$admin_sql_pass #possibile to add the pass variable -P with capital -P
+
+wp db create --allow-root --path=$target_dir # Create a db based on the website credentials of wp-config.php
+
+echo $path_is
+
+echo "Restore DB in new SQL server"
+if [[ $path_is == absolute ]]; then
+
+  db_path="${db_path:1}" #remove first character from string
+  restic --cleanup-cache -r $aws_repo dump $BACKUP_ID $db_path | mysql -u $admin_sql_user --password=$admin_sql_pass
+  echo "absolute"
+else
+## path is relative
+
+  db_path="$(basename $db_path)" #extract path name from a path
+  restic --cleanup-cache -r $aws_repo dump $BACKUP_ID $db_path | mysql -u $admin_sql_user --password=$admin_sql_pass
+
+fi
+
+
+## strange behivor
+## it seems as the sql restore got absolute path need the path of the file + file names
+## but relative path need only the file name file.sql
+
+
 
 ## extract the src-url from db
 ## db name based on wp-config file
+echo "collect data from website"
 db_name=$(wp --allow-root --path=$target_dir eval 'echo DB_NAME;')
 db_prefix=$(wp --allow-root --path=$target_dir db prefix)
 echo "db-name:$db_name"
-echo "db-name:$db_prefix"
+echo "prefix-name:$db_prefix"
+
+
+
+##### experimental #############
+# mysql -u $admin_sql_user --password=$admin_sql_pass -e "GRANT SELECT, INSERT, UPDATE ON $db_name.* TO '$new_sql_user'@'127.0.0.1';
+
 
 siteurl=$(mysql -u $admin_sql_user -p$admin_sql_pass $db_name -N -e"SELECT option_value  FROM ${db_prefix}options WHERE option_name = 'siteurl'")
 echo "url:$siteurl"
@@ -211,7 +282,7 @@ while true
       esac
   done
 
-  wp --allow-root --path=$target_dir search-replace $URL_TARGET $URL_SRC
+  wp --allow-root --path=$target_dir search-replace $URL_SRC $URL_TARGET
 
   echo "Restore procces complited"
 
