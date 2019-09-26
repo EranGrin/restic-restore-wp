@@ -47,7 +47,7 @@ echo "BackId: $BACKUP_ID"
 ################################################################
 function move_path
 {
-
+  echo "src-dir $src_dir"
   echo "\n`date` - Moveing wbesite directory to target-dir \n"
   mv -v $src_dir/* $src_dir/.*  $target_dir
 
@@ -79,7 +79,7 @@ dir="$(basename $absulote_path)" #extract the last dir from absulote path
 src_dir=$htdocs$absulote_path
 target_dir="$htdocs/$dir"
 
-echo "src-dir $src_dir"
+
 echo "target-dir $target_dir"
 
 
@@ -207,13 +207,13 @@ while true
       esac
   done
 
-
-
+echo "check if db exiest and if it does it would be recommand to drop it"
+wp db drop  --allow-root --path=$target_dir # Drop db based on the website credentials of wp-config.php
 wp db create --allow-root --path=$target_dir # Create a db based on the website credentials of wp-config.php
 
-echo $path_is
 
-echo "Restore DB in new SQL server"
+echo "\n`date` - Restore DB in new SQL server \n"
+
 if [[ $path_is == absolute ]]; then
 
   db_path="${db_path:1}" #remove first character from string
@@ -237,11 +237,10 @@ fi
 ## extract the src-url from db
 ## db name based on wp-config file
 echo "collect data from website"
-db_name=$(wp --allow-root --path=$target_dir eval 'echo DB_NAME;')
-db_prefix=$(wp --allow-root --path=$target_dir db prefix)
+db_name=$( wp --allow-root --path=$target_dir config get DB_NAME)
+db_prefix=$( wp --allow-root --path=$target_dir config get table_prefix)
 echo "db-name:$db_name"
 echo "prefix-name:$db_prefix"
-
 
 
 ##### experimental #############
@@ -253,11 +252,11 @@ echo "url:$siteurl"
 ## ask for the URL_TARGET + URL_SRC
 URL_SRC=$siteurl
 
-echo "For the restore proccess of the DB, mysql will need to use admin user with global privileges"
+echo "URL search & replace"
 while true
     do
       echo "examples: http://website.com or http://localhost:8888/website"
-
+      echo "SOURCE URL: $URL_SRC"
       ## read -r -p "What is the SOURCE URL, pls enter the url " URL_SRC
       read -r -p "What is the TARGET URL, pls enter the url " URL_TARGET
 
@@ -282,9 +281,66 @@ while true
       esac
   done
 
-  wp --allow-root --path=$target_dir search-replace $URL_SRC $URL_TARGET
 
-  echo "Restore procces complited"
+
+echo "check plugins for error"
+
+plugin_check=$(mktemp -t PLUGINTEST)
+          wp --allow-root --path=$target_dir plugin list &>$plugin_check &
+          pid=$!
+          wait $pid
+          PLUGINTEST=$(<$plugin_check)
+          rm $plugin_check
+
+# plugin_check="$(wp --allow-root --path=$target_dir plugin list & ) & "
+if [[ $PLUGINTEST =~ [^error] ]]; then
+  echo "it seems like we found an error with the plugins"
+
+  echo "we will try to disabled all plugins from db and present you the full check results"
+
+  #if error then disabled
+    mysql -u $admin_sql_user -p$admin_sql_pass $db_name -N -e"DELETE  FROM ${db_prefix}options WHERE option_name = 'active_plugins'"
+    wp --allow-root --path=$target_dir plugin verify-checksums --all
+
+    echo"you will need to activat all plugins manually as some files are mssing"
+
+else
+
+ echo "No Error"
+ continue
+
+fi
+
+
+echo "\n`date` - Start search-replace  FROM:$URL_SRC  TO:$URL_TARGET\n"
+wp --allow-root --path=$target_dir search-replace $URL_SRC $URL_TARGET
+
+echo "Restore procces complited"
+
+
+echo "\n`date` - Flush the .htaccess \n"
+# create a wp-cli.yml file with apache_modules: - mod_rewrite in the root dir of the website
+touch $target_dir/wp-cli.yml
+chmod 666 $target_dir/wp-cli.yml
+echo "apache_modules: \n - mod_rewrite" >> $target_dir/wp-cli.yml
+
+# change .htaccess  premmissions
+chmod 666 $target_dir/.htaccess
+
+# run the wp rewrite flush --hard
+cd $target_dir
+wp --allow-root rewrite flush --hard
+# wp --allow-root --path=$target_dir rewrite flush --hard
+
+# change back the .htaccess permisions
+chmod 644 $target_dir/.htaccess
+
+# remove wp-cli.yml
+rm $target_dir/wp-cli.yml
+
+
+
+
 
 
 
