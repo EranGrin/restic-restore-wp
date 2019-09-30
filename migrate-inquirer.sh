@@ -1,349 +1,389 @@
 #!/bin/bash
 
+###############################################
+#
+# Rstore restic backups
+# Migration of wordpress website based on restic
+#
+# by Eran Grinberg <soniceran@gmail.com>
+# No warranty provided, use at your own risk!
+#
+###############################################
+# Flow of script
+###############################################
+#
+#  1. Create snapshots.json group-by tags
+#  2. Fetch main variable (backup_id backup_time name etc..)
+#  3. Extract path objects & assign to variables
+#  4. Check if target-dir exists and if does then remove it
+#  5. The actual files restore
+#  6. Check if the path is relative or absolute (if absolute then use the move function)
+#  7. Configure WP DB Credentials in the wp-config.php
+#  8. Check plugins for error
+#	 9. URL search & replace
+# 10. Flush the .htaccess to the new domain
+#
+###############################################
 
-# This need to be changed to the relative AWS restic repo
-# aws_repo=s3:https://s3.amazonaws.com/restic-test-server
+## TODO: add option to handle sql server that is not localhost
+## TODO: add option to to triger backup on src server before starting migration
+## TODO: add option to handle static websites
+## TODO: if plugin error is found then run script to activate all plugins one by one
 
-# load env variables / credential need to be added to the file
+## TOTEST: restore with absolute path
+## TOTEST:
+###############################################
+source .restic-keys # export env variable
+source ./inquirer.sh/dist/list_input.sh # path for inquirer file
 
-# aws_repo=s3:s3.amazonaws.com/***REMOVED***/restic
-aws_repo=s3:https://s3.amazonaws.com/***REMOVED***/restic
+HTDOCS=/Applications/mamp/htdocs # absulote path to HTDOCS on the target server
+DATE=$(date +'%d/%m/%Y %H:%M:%S')#
 
-htdocs=/Applications/mamp/htdocs # absulote path to htdocs on the target server
 
-source .restic-keys
+#############################################################################
+####### Fetch main variable #################################################
+#############################################################################
+echo "\n $DATE - Generating snapshots Json \n"
+restic -r $AWS_REPO snapshots --group-by tags --json | jq '.' > snapshots.json
 
-# path for inquirer file
-source ./inquirer.sh/dist/list_input.sh
+# Filter WEBSITE_NAMES from snapshots.json
+WEBSITE_NAMES=$(cat snapshots.json | jq -j --arg c "' " --arg b "'" '$b + .[] .group_key .tags[] + $c')
 
-echo "\n`date` - Generating snapshots Json \n"
-restic -r $aws_repo snapshots --group-by tags --json | jq '.' > snapshots.json
+# WEBSITE_NAMES inquirer
+WEBSITE_NAMES=( $WEBSITE_NAMES)
+list_input "Which website would you like to restore ?" WEBSITE_NAMES SELECTED_WEBSITE
+echo "Website: $SELECTED_WEBSITE"
 
-website_name=$(cat snapshots.json | jq -j --arg c "' " --arg b "'" '$b + .[] .group_key .tags[] + $c')
+# Filter BACKUP_TIMES based on SELECTED_WEBSITE
+BACKUP_TIMES=$(cat snapshots.json \
+| jq -j --arg c "' " --arg b "'" --arg p "$SELECTED_WEBSITE" '.[] .snapshots[]
+| $b+ select(.tags[] == $p) .time + $c')
 
-echo $website_name
+# BACKUP_TIMES inquirer
+BACKUP_TIMES=( $BACKUP_TIMES)
+list_input "Which backup would you like to restore ?" BACKUP_TIMES SELECTED_BACKUP_TIME
+echo "Backup-time-stamp: $SELECTED_BACKUP_TIME"
 
-website=( $website_name)
-list_input "Which website would you like to restore ?" website selected_website
-
-echo "website: $selected_website"
-
-SITE_NAME=$selected_website
-BACKUP_TIMES=$(cat snapshots.json | jq -j --arg c "' " --arg b "'" --arg p "$SITE_NAME" '.[] .snapshots[] | $b+ select(.tags[] == $p) .time + $c')
-echo $BACKUP_TIMES
-
-time_stamp=( $BACKUP_TIMES)
-list_input "Which backup would you like to restore ?" time_stamp selected_time_stamp
-
-echo "backup: $selected_time_stamp"
-
-BACKUP_TIME=$selected_time_stamp
-BACKUP_ID=$(cat snapshots.json | jq -j --arg p "$SITE_NAME" --arg t "$BACKUP_TIME"  '.[] .snapshots[] | select(.tags[]== $p ) | select(.time == $t ) .short_id')
-
+# Filter BACKUP_ID based on SELECTED_WEBSITE + SELECTED_BACKUP_TIME
+BACKUP_ID=$(cat snapshots.json \
+| jq -j --arg p "$SELECTED_WEBSITE" --arg t "$SELECTED_BACKUP_TIME"  '.[] .snapshots[]
+| select(.tags[]== $p )
+| select(.time == $t ) .short_id')
 echo "BackId: $BACKUP_ID"
+
 
 ################################################################
 ### Function for moving the absulote path to target path #######
 ################################################################
 function move_path
 {
-  echo "src-dir $src_dir"
-  echo "\n`date` - Moveing wbesite directory to target-dir \n"
-  mv -v $src_dir/* $src_dir/.*  $target_dir
+	mkdir -p $TARGET_DIR
+	echo "src-dir $LCL_SRC_DIR"
+	echo "\n $DATE - \n Moveing wbesite directory to target-dir \n"
+	mv -v $LCL_SRC_DIR/* $LCL_SRC_DIR/.*  $TARGET_DIR
 
-  echo "\n`date` - Cleanup leftovers direcotries \n"
-  if [ -z "$base_dir" ]; then
-    ## this is a security if statment to check if the basedir var is empaty if it does
-    ## empty and script would not exit then all the htdocs will be deleted
-    echo "ERROR - could not find base-dir variable"
-    exit 1
-  else
-    rm -r $htdocs/$base_dir
-  fi
-
+	echo "\n $DATE - Cleanup leftovers direcotries \n"
+	if [ -z "$BASE_DIR" ]; then
+		## this is a security if statment to check if the basedir var is empaty and if it does
+		## empty and script would not exit then all the HTDOCS will be deleted
+		echo "ERROR - could not find base-dir variable"
+		exit 1
+	else
+		rm -r $HTDOCS/$BASE_DIR
+	fi
 }
+
 
 ######################################################################
 ###### extract path objects & assign to variables ####################
 ######################################################################
-absulote_path=$(cat snapshots.json | jq -j --arg p "$SITE_NAME" --arg t "$BACKUP_TIME"  '.[] .snapshots[] | select(.tags[]== $p ) | select(.time == $t )
-.paths[] | select( test(".sql") | not )')
-# filter the absulote path based on the chosen arguments of SITE_NAME + BACKUP_TIME + regex no object with *sql
-echo "$absulote_path"
+# Filter the absulote path based on the chosen arguments of SELECTED_WEBSITE + SELECTED_BACKUP_TIME + regex no object with *sql
+ABSULOTE_PATH=$(cat snapshots.json \
+| jq -j --arg p "$SELECTED_WEBSITE" --arg t "$SELECTED_BACKUP_TIME"  '.[] .snapshots[]
+| select(.tags[]== $p )
+| select(.time == $t ) .paths[]
+| select( test(".sql")
+| not )')
+echo "Absulote src path: $ABSULOTE_PATH"
 
-relative_path=$(restic ls -r $aws_repo $BACKUP_ID  --path "$absulote_path" | sed -n 2p)
-#get the first dir from restic ls command - use to identify relative path
+# Filter the first dir from restic ls command - use to identify relative path
+RELATIVE_PATH=$(restic ls -r $AWS_REPO $BACKUP_ID | sed -n 2p)
 
-dir="$(basename $absulote_path)" #extract the last dir from absulote path
+# Extract the last dir from absulote path
+LAST_DIR="$(basename $ABSULOTE_PATH)"
 
-src_dir=$htdocs$absulote_path
-target_dir="$htdocs/$dir"
+# Extract the first dir from absulote path
+BASE_DIR=$(echo "$ABSULOTE_PATH" | awk -F "/" '{print $2}')
 
+LCL_SRC_DIR=$HTDOCS$ABSULOTE_PATH
+TARGET_DIR="$HTDOCS/$LAST_DIR"
 
-echo "target-dir $target_dir"
+echo "Target-dir: $TARGET_DIR"
 
-
-base_dir=$(echo "$absulote_path" | awk -F "/" '{print $2}')
 
 ##############################################################################
-###### check if target-dir alerady exists and if yes then remove it ##########
+###### check if target-dir exists and if does then remove it ##########
 ##############################################################################
-
-echo "\n`date` - check if target-dir alerady exists and if yes then remove it\n"
-if [ -d "$target_dir" ]; then
-  echo "$target_dir"
-  echo "The target dir exists and therefore it will be removed"
-  rm -r $target_dir
-  mkdir -p $target_dir ### need to check this with absolute but for relative it might not be needed
+echo "\n $DATE - Check if target-dir exists and if it does then remove it"
+if [ -d "$TARGET_DIR" ]; then
+	echo "\n The target-dir exists and therefore it will be removed"
+	rm -r $TARGET_DIR
 else
-  continue
+	continue
 fi
 
-################################
-##### The actual restore #######
+
+######################################
+##### The actual files restore #######
 ##################################################################################################
-echo "Start restore - this might take a while"
-restic -r $aws_repo restore $BACKUP_ID --target $htdocs  --exclude='*.sql' --path "$absulote_path"
+echo "\n $DATE - Start restore - this might take a while \n"
+restic -r $AWS_REPO restore $BACKUP_ID --target $HTDOCS  --exclude='*.sql' --path "$ABSULOTE_PATH"
 
 
 #############################################################
-###### check if the path is relative or absolute ############
+###### Check if the path is relative or absolute ############
 ###### & based on path kind use move function or continue ###
 #############################################################
-echo "base_dir: $base_dir"
-echo "relative_path: $relative_path"
-if [[ $relative_path == "/$base_dir" ]]; then # test if path is relative or absolute
-  #use absolute path function
-  move_path
-  echo "found absolute path"
-  path_is="absolute"
+echo "Base-dir: $BASE_DIR"
+
+if [[ $RELATIVE_PATH == "/$BASE_DIR" ]]; then # Test if path is relative or absolute
+	# use absolute path function
+	move_path
+  	echo "Found absolute path"
+		echo "Absulote-path: $ABSULOTE_PATH"
+  	path_is="absolute"
 else
-  #use relative path function
-  continue
-  echo "found relative path"
-  path_is="relative"
+	# use relative path function
+		echo "Found relative path"
+		echo "Relative-path: $RELATIVE_PATH"
+  	path_is="relative"
 
+		continue
 fi
-
 
 #############################################################
 ##### DB restore & migration proccess for WP website ########
 #############################################################
-
-## ? consider how to handle sql server that is not localhost ?
-
-## ask user if he want to assign new sql credentials to the website
-
-sql_credentials=( 'New SQL credentials' 'Orignin SQL credentials' )
-list_input "would you like to assign new SQL credentials to the website or use the origin SQL credentials ?" sql_credentials selected_sql_credentials
+##### Configure WP DB Credentials ########
+##########################################
+# Ask user if he want to assign new sql credentials to the website
+SQL_CREDENTIALS=( 'New SQL credentials' 'Orignin SQL credentials' )
+list_input "Assign New SQL credentials for the website OR use the origin SQL credentials ?" SQL_CREDENTIALS selected_sql_credentials
 
 if [ "$selected_sql_credentials" == "New SQL credentials" ]; then
-  while true
-      do
-        read -r -p "what is the sql user, pls enter the user name " new_sql_user
+	while true
+	do
+		read -r -p "What is the sql user, pls enter the user name " NEW_SQL_USER
+		read -r -p "What is the sql pass, pls enter the password " NEW_SQL_PASS
 
-          read -r -p "what is the sql pass, pls enter the password " new_sql_pass
+  		echo "\n"
+  		echo "Website user sql credentials"
+  		echo "New sql user $NEW_SQL_USER"
+  		echo "New sql pass $NEW_SQL_PASS"
 
-          echo "\n"
-          echo "website user sql credentials"
-          echo "new sql user $new_sql_user"
-          echo "new sql pass $new_sql_pass"
+		read -r -p "Are You Sure? [Y/n] " input
 
-          read -r -p "Are You Sure? [Y/n] " input
+		case $input in
+			[yY][eE][sS]|[yY])
+				echo "Yes"
 
-      	case $input in
-      	    [yY][eE][sS]|[yY])
-      			echo "Yes"
+				echo "\n $DATE - Change sql credentials at wp-config.php \n"
+				wp --allow-root --path=$TARGET_DIR config set DB_USER "$NEW_SQL_USER" --raw
+				wp --allow-root --path=$TARGET_DIR config set DB_PASSWORD "$NEW_SQL_PASS" --raw
 
-            echo "\n`date` - Change sql credentials at wp-config.php \n"
-            wp --allow-root --path=$target_dir config set DB_USER "$new_sql_user" --raw
-            wp --allow-root --path=$target_dir config set DB_PASSWORD "$new_sql_pass" --raw
-
-                  break
-      			;;
-      	    [nN][oO]|[nN])
-      			echo "No"
-      	       		;;
-      	    *)
-      		echo "Invalid input..."
-      		;;
-      	esac
-    done
-
+				break
+				;;
+			[nN][oO]|[nN])
+				echo "No"
+				;;
+			*)
+				echo "Invalid input..."
+				;;
+		esac
+	done
 fi
 
 
-echo "\n`date` - Restore db \n"
-db_path=$(cat snapshots.json | jq -j --arg p "$SITE_NAME" --arg t "$BACKUP_TIME"  '.[] .snapshots[] | select(.tags[]== $p ) | select(.time == $t ) .paths[] | select( test(".sql") )')
-
-# filter the db sql file path based on the chosen arguments of SITE_NAME + BACKUP_TIME + regex object with *sql
-
-
+#######################################################################
+###### prompt sql admin credemtials ###################################
+#######################################################################
+echo "\n $DATE - sql admin credemtials \n"
 echo "For the restore proccess of the DB, mysql will need to use admin user with global privileges"
 while true
-    do
-      read -r -p "pls enter sql admin user name " admin_sql_user
+do
+	read -r -p "Pls enter sql admin user name " ADMIN_SQL_USER
+	read -r -p "Pls enter sql admin password " ADMIN_SQL_PASS
 
-        read -r -p "pls enter sql admin password " admin_sql_pass
+  	echo "\n"
+  	echo "SQL Admin Credentials"
+  	echo "Admin sql user $ADMIN_SQL_USER"
+  	echo "Admin sql pass $ADMIN_SQL_PASS"
 
-        echo "\n"
-        echo "SQL Admin Credentials"
-        echo "Admin sql user $admin_sql_user"
-        echo "Admin sql pass $admin_sql_pass"
+	read -r -p "Are You Sure? [Y/n] " input
 
-        read -r -p "Are You Sure? [Y/n] " input
-
-      case $input in
-          [yY][eE][sS]|[yY])
-          echo "Yes"
-                break
-          ;;
-          [nN][oO]|[nN])
-          echo "No"
-                ;;
-          *)
-        echo "Invalid input..."
-        ;;
-      esac
-  done
-
-echo "check if db exiest and if it does it would be recommand to drop it"
-wp db drop  --allow-root --path=$target_dir # Drop db based on the website credentials of wp-config.php
-wp db create --allow-root --path=$target_dir # Create a db based on the website credentials of wp-config.php
+	case $input in
+		[yY][eE][sS]|[yY])
+			echo "Yes"
+			break
+			;;
+		[nN][oO]|[nN])
+			echo "No"
+			;;
+		*)
+			echo "Invalid input..."
+			;;
+	esac
+done
 
 
-echo "\n`date` - Restore DB in new SQL server \n"
+################################################################################################
+###### check if db exists and if it does it would be recommended to drop it  ###################
+################################################################################################
+echo "Check if db exists and if it does, it would be recommended to drop it"
+wp db drop  --allow-root --path=$TARGET_DIR # Drop db based on the website credentials of wp-config.php
+wp db create --allow-root --path=$TARGET_DIR # Create a db based on the website credentials of wp-config.php
+
+
+#######################################################################
+######  Restore DB in new SQL server  #################################
+#######################################################################
+echo "\n $DATE - Restore DB in a new SQL server \n"
+
+# Filter the db sql file path based on the chosen arguments of SELECTED_WEBSITE + SELECTED_BACKUP_TIME + regex object with *sql
+DB_PATH=$(cat snapshots.json | \
+jq -j --arg p "$SELECTED_WEBSITE" --arg t "$SELECTED_BACKUP_TIME" '.[] .snapshots[]
+| select(.tags[]== $p )
+| select(.time == $t ) .paths[]
+| select( test(".sql") )')
 
 if [[ $path_is == absolute ]]; then
+	DB_PATH="${DB_PATH:1}" # Remove first character from string
 
-  db_path="${db_path:1}" #remove first character from string
-  restic --cleanup-cache -r $aws_repo dump $BACKUP_ID $db_path | mysql -u $admin_sql_user --password=$admin_sql_pass
-  echo "absolute"
+	restic --cleanup-cache -r $AWS_REPO dump $BACKUP_ID $DB_PATH \
+	| mysql -u $ADMIN_SQL_USER --password=$ADMIN_SQL_PASS
+	echo "Absolute path for db restore"
+
 else
-## path is relative
+	# Path is relative
+	DB_PATH="$(basename $DB_PATH)" # Extract file.sql name from the path
 
-  db_path="$(basename $db_path)" #extract path name from a path
-  restic --cleanup-cache -r $aws_repo dump $BACKUP_ID $db_path | mysql -u $admin_sql_user --password=$admin_sql_pass
+	restic --cleanup-cache -r $AWS_REPO dump $BACKUP_ID $DB_PATH \
+	| mysql -u $ADMIN_SQL_USER --password=$ADMIN_SQL_PASS
 
 fi
 
-
-## strange behivor
-## it seems as the sql restore got absolute path need the path of the file + file names
+## strange behaviour
+## it seems as the sql restore with absolute path need the path of the file + file names
 ## but relative path need only the file name file.sql
 
 
+#######################################################################
+###### get db name +prefix based on wp-config file  ###################
+#######################################################################
+echo "Collect data from website"
+DB_NAME=$( wp --allow-root --path=$TARGET_DIR config get DB_NAME)
+DB_PREFIX=$( wp --allow-root --path=$TARGET_DIR config get table_prefix)
+echo "DB-Name: $DB_NAME"
+echo "Prefix: $DB_PREFIX"
 
-## extract the src-url from db
-## db name based on wp-config file
-echo "collect data from website"
-db_name=$( wp --allow-root --path=$target_dir config get DB_NAME)
-db_prefix=$( wp --allow-root --path=$target_dir config get table_prefix)
-echo "db-name:$db_name"
-echo "prefix-name:$db_prefix"
+# Fetch SITE URL
+URL_SRC=$(mysql -u $ADMIN_SQL_USER -p$ADMIN_SQL_PASS $DB_NAME -N -e"SELECT option_value  FROM ${DB_PREFIX}options WHERE option_name = 'siteurl'")
+echo "Source URL: $URL_SRC"
 
 
-##### experimental #############
-# mysql -u $admin_sql_user --password=$admin_sql_pass -e "GRANT SELECT, INSERT, UPDATE ON $db_name.* TO '$new_sql_user'@'127.0.0.1';
-
-
-siteurl=$(mysql -u $admin_sql_user -p$admin_sql_pass $db_name -N -e"SELECT option_value  FROM ${db_prefix}options WHERE option_name = 'siteurl'")
-echo "url:$siteurl"
-## ask for the URL_TARGET + URL_SRC
-URL_SRC=$siteurl
-
-echo "URL search & replace"
+#######################################################################
+###### URL search & replace  ##########################################
+#######################################################################
+echo "\n $DATE - URL search & replace \n"
 while true
-    do
-      echo "examples: http://website.com or http://localhost:8888/website"
-      echo "SOURCE URL: $URL_SRC"
-      ## read -r -p "What is the SOURCE URL, pls enter the url " URL_SRC
-      read -r -p "What is the TARGET URL, pls enter the url " URL_TARGET
+do
+	echo "Examples: http://website.com or http://localhost:8888/website"
+	echo "SOURCE URL: $URL_SRC"
 
-        echo "\n"
-        echo "URL Changes - search & replace"
-        echo "SOURCE URL: $URL_SRC"
-        echo "TARGET URL: $URL_TARGET"
+	# Read -r -p "What is the SOURCE URL, pls enter the url " URL_SRC / Fetch from DB
+	read -r -p "What is the TARGET URL, pls enter the url " URL_TARGET
 
-        read -r -p "Are You Sure? [Y/n] " input
+	echo "\n"
+	echo "URL Changes - search & replace"
+	echo "SOURCE URL: $URL_SRC"
+	echo "TARGET URL: $URL_TARGET"
 
-      case $input in
-          [yY][eE][sS]|[yY])
-          echo "Yes"
-                break
-          ;;
-          [nN][oO]|[nN])
-          echo "No"
-                ;;
-          *)
-        echo "Invalid input..."
-        ;;
-      esac
-  done
+	read -r -p "Are You Sure? [Y/n] " input
+
+	case $input in
+		[yY][eE][sS]|[yY])
+			echo "Yes"
+			break
+			;;
+		[nN][oO]|[nN])
+			echo "No"
+			;;
+		*)
+			echo "Invalid input..."
+			;;
+	esac
+done
 
 
+#######################################################################
+############ check plugins for error  #################################
+#######################################################################
 
-echo "check plugins for error"
+echo "\n $DATE - Check plugins for error \n"
+PLUGIN_CHECK=$(mktemp -t PLUGINTEST)
+	wp --allow-root --path=$TARGET_DIR plugin list &>$PLUGIN_CHECK &
+	pid=$!
+	wait $pid
+	PLUGINTEST=$(<$PLUGIN_CHECK)
+	rm $PLUGIN_CHECK
 
-plugin_check=$(mktemp -t PLUGINTEST)
-          wp --allow-root --path=$target_dir plugin list &>$plugin_check &
-          pid=$!
-          wait $pid
-          PLUGINTEST=$(<$plugin_check)
-          rm $plugin_check
-
-# plugin_check="$(wp --allow-root --path=$target_dir plugin list & ) & "
 if [[ $PLUGINTEST =~ [^error] ]]; then
-  echo "it seems like we found an error with the plugins"
+	echo "It seems like we found an error with the plugins"
+	echo "We will try to disable all plugins from db and present you the full check results"
 
-  echo "we will try to disabled all plugins from db and present you the full check results"
+	mysql -u $ADMIN_SQL_USER -p$ADMIN_SQL_PASS $DB_NAME -N -e"DELETE  FROM ${DB_PREFIX}options WHERE option_name = 'active_plugins'"
 
-  #if error then disabled
-    mysql -u $admin_sql_user -p$admin_sql_pass $db_name -N -e"DELETE  FROM ${db_prefix}options WHERE option_name = 'active_plugins'"
-    wp --allow-root --path=$target_dir plugin verify-checksums --all
+	wp --allow-root --path=$TARGET_DIR plugin verify-checksums --all
 
-    echo"you will need to activat all plugins manually as some files are mssing"
+	echo"You will need to activate all plugins manually as some files are mssing"
 
 else
 
- echo "No Error"
- continue
+	echo "No Error"
+	continue
 
 fi
 
 
-echo "\n`date` - Start search-replace  FROM:$URL_SRC  TO:$URL_TARGET\n"
-wp --allow-root --path=$target_dir search-replace $URL_SRC $URL_TARGET
+#######################################################################
+############ Start search-replace   ###################################
+#######################################################################
 
-echo "Restore procces complited"
+echo "\n $DATE - Start search-replace  FROM:$URL_SRC  TO:$URL_TARGET\n"
+wp --allow-root --path=$TARGET_DIR search-replace $URL_SRC $URL_TARGET
+
+echo "Restore process completed"
 
 
-echo "\n`date` - Flush the .htaccess \n"
-# create a wp-cli.yml file with apache_modules: - mod_rewrite in the root dir of the website
-touch $target_dir/wp-cli.yml
-chmod 666 $target_dir/wp-cli.yml
-echo "apache_modules: \n - mod_rewrite" >> $target_dir/wp-cli.yml
+#######################################################################
+############ Flush the .htaccess to the new domain ####################
+#######################################################################
 
-# change .htaccess  premmissions
-chmod 666 $target_dir/.htaccess
+echo "\n $DATE - Flush the .htaccess \n"
+# Create a wp-cli.yml file with apache_modules: - mod_rewrite in the root dir of the website
+touch $TARGET_DIR/wp-cli.yml
+chmod 666 $TARGET_DIR/wp-cli.yml
+echo "apache_modules: \n - mod_rewrite" >> $TARGET_DIR/wp-cli.yml
 
-# run the wp rewrite flush --hard
-cd $target_dir
+# Change .htaccess  premmissions
+chmod 666 $TARGET_DIR/.htaccess
+
+# Run the wp rewrite flush --hard
+cd $TARGET_DIR
 wp --allow-root rewrite flush --hard
-# wp --allow-root --path=$target_dir rewrite flush --hard
 
-# change back the .htaccess permisions
-chmod 644 $target_dir/.htaccess
+# Change back the .htaccess permisions
+chmod 644 $TARGET_DIR/.htaccess
 
-# remove wp-cli.yml
-rm $target_dir/wp-cli.yml
-
-
-
-
-
-
-
-# using cli config set command to change the values in the wp-config.php  https://developer.wordpress.org/cli/commands/config/set/
-# then  when every thing is correctly configured
-# use  wp search-replace URL_SRC $URL_LOCAL
+# Remove wp-cli.yml
+rm $TARGET_DIR/wp-cli.yml
