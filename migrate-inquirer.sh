@@ -34,7 +34,7 @@
 ## TOTEST:
 ###############################################
 source .restic-keys # export env variable
-source ./inquirer.sh/dist/list_input.sh # path for inquirer file
+source ./dist/list_input.sh # path for inquirer file
 
 HTDOCS=/Applications/mamp/htdocs # absulote path to HTDOCS on the target server
 DATE=$(date +'%d/%m/%Y %H:%M:%S')#
