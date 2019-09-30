@@ -9,6 +9,11 @@
 # No warranty provided, use at your own risk!
 #
 ###############################################
+# Dependencies
+# 1. JQ  https://stedolan.github.io/jq/
+# 2. WP-CLI https://wp-cli.org/
+#
+###############################################
 # Flow of script
 ###############################################
 #
