@@ -1,0 +1,20 @@
+
+- name: Install crx-restic locally
+  hosts: backup
+  connection: local
+  tasks:
+    - name: Create ~/.crx-restic directories
+      file:
+        path: "{{ ansible_env.HOME }}/.crx-restic/crx-server.{{ inventory_hostname }}"
+        state: directory
+
+    - name: Create aws and restic files
+      template:
+        src: "{{ item }}.j2"
+        dest: "{{ ansible_env.HOME }}/.crx-restic/crx-server.{{ inventory_hostname }}/{{ item }}"
+      with_items:
+        - aws
+        - restic
+
+
+

@@ -1,0 +1,81 @@
+#!/bin/bash
+
+set -e
+
+export BACKUP_RESTORE_BUCKET=restic-test-server
+
+
+# Check the repository for errors
+#crx-restic check
+
+#
+# # Backup vhosts with static sites
+# while read -r vhost || [[ -n "$vhost" ]]; do
+#   crx-restic backup "$vhost" "/usr/local/www/apache24/noexec/$vhost"
+# done < /root/.crx-restic/***REMOVED***/vhosts_static
+
+
+# Backup vhosts with database
+dbDir="/tmp/mysql"
+rm -rf $dbDir
+mkdir -p $dbDir
+
+# might be better to encrypt this or put in anoher file e.g my.cnf or mylogin.cnf
+# might be better to create another user that is not admin and only have read access
+cat >~/.tmp-mysql <<EOL
+[client]
+user = dev
+password = DEV2323
+host = localhost
+EOL
+
+sh ./crx-restic unlock
+
+# while loop that read the vhosts_with_db file then create a var line
+# -r Do not treat a backslash character in any special way. Consider each backslash to be part of the input line.
+# || if the first command succeed the second will never be executed
+# [[ -n "$line" ]]; stop loop if line is empty
+# [ -n STRING ]	True if the length of "STRING" is non-zero so.. if 0 then false which will then stop the while loop
+
+# IFS=';' # set the Internal Field Separator to ;
+# read -r -a myarray - read the same file vhosts_with_db create anothe var myarray
+# -a Each name is an indexed array variable (see Arrays).
+# <<< here-string -assign $line string to the myarray
+
+
+while read -r line || [[ -n "$line" ]]; do
+  IFS=';' read -r -a myarray <<< "$line"
+  vhost=${myarray[0]}
+  database=${myarray[1]}
+
+  mysqldump --defaults-extra-file=~/.tmp-mysql \
+    --force \
+    --quote-names --dump-date \
+    --opt --single-transaction \
+    --events --routines --triggers \
+    --databases "$database" \
+    --result-file="$dbDir/$database.sql"
+
+  sh ./crx-restic  backup "$vhost" "/Applications/Mamp/htdocs/$vhost" "$dbDir/$database.sql"
+  rm "$dbDir/$database.sql"
+
+#it might be better to add - & wait $!; - after the main command then it wiill wait or maybe also between the MYSQLDUMP and the backup command
+
+  sleep 3
+done < /Users/erangrinberg/Desktop/DEV/Back-rec-sys/restic-test-server/vhosts_with_db
+
+
+# Backup etc
+#crx-restic backup etc /etc /var/db/acme
+
+
+# Forget by default policy
+sh ./crx-restic --group-by host,tags
+# forget_by_policy
+
+
+# Clean up
+rm ~/.tmp-mysql
+rm -rf "$dbDir"
+
+exit 0
