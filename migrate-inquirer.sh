@@ -11,7 +11,7 @@
 ###############################################
 # Dependencies
 # 1. JQ  https://stedolan.github.io/jq/
-# 2. WP-CLI https://wp-cli.org/
+# 2. WP-CLI https://wp-cli.org/ 
 #
 ###############################################
 # Flow of script
@@ -36,7 +36,7 @@
 ## TODO: if plugin error is found then run script to activate all plugins one by one
 
 ## TOTEST: restore with absolute path
-## TOTEST:
+
 ###############################################
 source .restic-keys # export env variable
 source ./dist/list_input.sh # path for inquirer file
@@ -49,7 +49,7 @@ DATE=$(date +'%d/%m/%Y %H:%M:%S')#
 ####### Fetch main variable #################################################
 #############################################################################
 echo "\n $DATE - Generating snapshots Json \n"
-restic -r $AWS_REPO snapshots --group-by tags --json | jq '.' > snapshots.json
+restic -r $REPO snapshots --group-by tags --json | jq '.' > snapshots.json
 
 # Filter WEBSITE_NAMES from snapshots.json
 WEBSITE_NAMES=$(cat snapshots.json | jq -j --arg c "' " --arg b "'" '$b + .[] .group_key .tags[] + $c')
@@ -112,7 +112,7 @@ ABSULOTE_PATH=$(cat snapshots.json \
 echo "Absulote src path: $ABSULOTE_PATH"
 
 # Filter the first dir from restic ls command - use to identify relative path
-RELATIVE_PATH=$(restic ls -r $AWS_REPO $BACKUP_ID | sed -n 2p)
+RELATIVE_PATH=$(restic ls -r $REPO $BACKUP_ID | sed -n 2p)
 
 # Extract the last dir from absulote path
 LAST_DIR="$(basename $ABSULOTE_PATH)"
@@ -142,7 +142,7 @@ fi
 ##### The actual files restore #######
 ##################################################################################################
 echo "\n $DATE - Start restore - this might take a while \n"
-restic -r $AWS_REPO restore $BACKUP_ID --target $HTDOCS  --exclude='*.sql' --path "$ABSULOTE_PATH"
+restic -r $REPO restore $BACKUP_ID --target $HTDOCS  --exclude='*.sql' --path "$ABSULOTE_PATH"
 
 
 #############################################################
@@ -264,7 +264,7 @@ jq -j --arg p "$SELECTED_WEBSITE" --arg t "$SELECTED_BACKUP_TIME" '.[] .snapshot
 if [[ $path_is == absolute ]]; then
 	DB_PATH="${DB_PATH:1}" # Remove first character from string
 
-	restic --cleanup-cache -r $AWS_REPO dump $BACKUP_ID $DB_PATH \
+	restic --cleanup-cache -r $REPO dump $BACKUP_ID $DB_PATH \
 	| mysql -u $ADMIN_SQL_USER --password=$ADMIN_SQL_PASS
 	echo "Absolute path for db restore"
 
@@ -272,7 +272,7 @@ else
 	# Path is relative
 	DB_PATH="$(basename $DB_PATH)" # Extract file.sql name from the path
 
-	restic --cleanup-cache -r $AWS_REPO dump $BACKUP_ID $DB_PATH \
+	restic --cleanup-cache -r $REPO dump $BACKUP_ID $DB_PATH \
 	| mysql -u $ADMIN_SQL_USER --password=$ADMIN_SQL_PASS
 
 fi
