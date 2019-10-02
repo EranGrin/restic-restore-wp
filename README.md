@@ -56,6 +56,7 @@ sudo sh ./restore-inquirer.sh
 - For the MySQL changes, an admin user will be needed 
 
 ### ToDo 
+- rebuild the restore script (as it is doesn't work at the moment) 
 - add an option to handle SQL server that is not localhost
 - add an option to trigger backup on src server before starting the migration
 - add an option to handle static websites
