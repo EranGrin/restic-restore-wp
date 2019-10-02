@@ -29,6 +29,7 @@ The aim of this project is to provide an "easy to use" restore/migration for Res
 - Clone the repo into any folder under home  ~/*
 - Add credentials into .restic-keys file 
   - In the .restic-keys one should enter all needed credentials, such as: REPO ,RESTIC_PASSWORD, AWS_ACCESS_KEY_ID etc..
+- Add HTDOCS (Public folder) target path in .restic-keys file (relevant only for migration) 
 
 
 ## How To Use 
