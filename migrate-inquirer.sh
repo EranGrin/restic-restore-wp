@@ -41,13 +41,13 @@
 source .restic-keys # export env variable
 source ./dist/list_input.sh # path for inquirer file
 
-DATE=$(date +'%d/%m/%Y %H:%M:%S')#
+DATE=$(date +'%d/%m/%Y %H:%M:%S')
 
 
 #############################################################################
 ####### Fetch main variable #################################################
 #############################################################################
-echo "\n $DATE - Generating snapshots Json \n"
+echo "\n $DATE - Generating snapshots json \n"
 restic -r $REPO snapshots --group-by tags --json | jq '.' > snapshots.json
 
 # Filter WEBSITE_NAMES from snapshots.json
