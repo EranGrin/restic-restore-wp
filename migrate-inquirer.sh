@@ -11,7 +11,7 @@
 ###############################################
 # Dependencies
 # 1. JQ  https://stedolan.github.io/jq/
-# 2. WP-CLI https://wp-cli.org/ 
+# 2. WP-CLI https://wp-cli.org/
 #
 ###############################################
 # Flow of script
@@ -41,7 +41,6 @@
 source .restic-keys # export env variable
 source ./dist/list_input.sh # path for inquirer file
 
-HTDOCS=/Applications/mamp/htdocs # absulote path to HTDOCS on the target server
 DATE=$(date +'%d/%m/%Y %H:%M:%S')#
 
 
